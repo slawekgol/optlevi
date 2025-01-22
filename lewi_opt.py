@@ -5,8 +5,10 @@ import math
 import matplotlib.pyplot
 import numpy
 import os
+import pyswarms
 import scipy.optimize
 import subprocess
+import threading
 import time
 import sys
 
@@ -39,9 +41,12 @@ charge_r = 0.012 # ROZMIAR WSADU
 forceSurfaceTension = -1.45 # TU STOSOWAĆ Z POWYŻSZEJ TABELKI DLA POSZCZEGÓLNYCH ROZMIARÓW WSADU
 
 # other
-logPath = 'log.csv'
+logPath = 'opt.log'
 logColumnDelimiter = ', '
 logRowDelimiter = '\n'
+
+# Threading
+GLOBAL_LOCK = threading.Lock()
 
 # Optimization progress chart
 optimalY_totalForce = None
@@ -57,6 +62,14 @@ optimalArguments = None
 lastCriterionValue = 0
 requiredCriterionTolerance = 11
 # requiredCriterionTolerance = 0.001
+
+def log(message):
+  with open(logPath, 'a') as logFile:
+    logFile.write(f'[{datetime.datetime.now().isoformat()}Z] ')
+    logFile.write(message)
+    logFile.write(logRowDelimiter)
+    logFile.flush()
+    print(message)
 
 def readTotalForce():
   # Output (GlobalForce.txt)
@@ -240,83 +253,84 @@ def outputCallback(result, seconds):
   print(result, seconds)
 
 def runGMSHandGetDP(argument):
-  # Measure iteration time
-  timeStart = time.time()
+  with GLOBAL_LOCK:
+    # Measure iteration time
+    timeStart = time.time()
 
-  # Optimized variables
-  global optimalArguments, optimalY_totalForce
+    # Optimized variables
+    global optimalArguments, optimalY_totalForce
 
-  current1 = argument[0]
-  current2 = argument[1]
-  current3 = argument[2]
-  current4 = argument[3]
-  (indx, indy) = turnPositions()
+    argument = numpy.array(argument).flatten()
+    current1 = argument[0]
+    current2 = argument[1]
+    current3 = argument[2]
+    current4 = argument[3]
+    (indx, indy) = turnPositions()
 
-  # Input (coil.geo)
-  with open('coil.geo', 'w') as coilFile:
-    # coilFile.write(f'coil_x = {coilX};\n')
-    # coilFile.write(f'coil_y = {coilY};\n')
-    coilFile.write(f'number_of_turns = {numberOfTurns};\n')
-    coilFile.write(f'number_of_turns2 = {numberOfTurns2};\n')
-    coilFile.write(f'number_of_turns3 = {numberOfTurns3};\n')
-    coilFile.write(f'number_of_turns4 = {numberOfTurns4};\n')
-    coilFile.write(f"indx() = {str(indx).replace('[', '{').replace(']', '}')};\n")
-    coilFile.write(f"indy() = {str(indy).replace('[', '{').replace(']', '}')};\n")
-    coilFile.write(f'charge_r = {charge_r};\n')
-    coilFile.write(f'charge_R = {charge_R};\n')
-    coilFile.write(f"Current1 = {current1};\n")
-    coilFile.write(f"Current2 = {current2};\n")
-    coilFile.write(f"Current3 = {current3};\n")
-    coilFile.write(f"Current4 = {-current4};\n")
+    # Input (coil.geo)
+    with open('coil.geo', 'w') as coilFile:
+      # coilFile.write(f'coil_x = {coilX};\n')
+      # coilFile.write(f'coil_y = {coilY};\n')
+      coilFile.write(f'number_of_turns = {numberOfTurns};\n')
+      coilFile.write(f'number_of_turns2 = {numberOfTurns2};\n')
+      coilFile.write(f'number_of_turns3 = {numberOfTurns3};\n')
+      coilFile.write(f'number_of_turns4 = {numberOfTurns4};\n')
+      coilFile.write(f"indx() = {str(indx).replace('[', '{').replace(']', '}')};\n")
+      coilFile.write(f"indy() = {str(indy).replace('[', '{').replace(']', '}')};\n")
+      coilFile.write(f'charge_r = {charge_r};\n')
+      coilFile.write(f'charge_R = {charge_R};\n')
+      coilFile.write(f"Current1 = {current1};\n")
+      coilFile.write(f"Current2 = {current2};\n")
+      coilFile.write(f"Current3 = {current3};\n")
+      coilFile.write(f"Current4 = {-current4};\n")
 
-    # turnDistScale = turnDist * 0.03 / radius
-    # coilFile.write(f'turn_dist = {turnDistScale};\n')
-    # coilFile.write(f'turn_start = {turnStart};\n')
-    coilFile.flush()
+      # turnDistScale = turnDist * 0.03 / radius
+      # coilFile.write(f'turn_dist = {turnDistScale};\n')
+      # coilFile.write(f'turn_start = {turnStart};\n')
+      coilFile.flush()
 
-  # Run GMSH and wait
-  # 31.07.2024 - Using 'subprocess.run' instead of 'os.system' for calling external program
-  # os.system('./gmsh -v 0 -3 levitation_melting_2d.geo')
+    # Run GMSH and wait
+    # 31.07.2024 - Using 'subprocess.run' instead of 'os.system' for calling external program
+    # os.system('./gmsh -v 0 -3 levitation_melting_2d.geo')
 
-  while True:
-    ok = 1
+    while True:
+      ok = 1
 
-    try:
-      subprocess.run(['./gmsh', '-v', '0', '-3', 'levitation_melting_2d.geo'], stdout = subprocess.PIPE, stderr = subprocess.PIPE, text = True, timeout = 30)
-
-    except subprocess.TimeoutExpired:
-      ok = 0
-
-    else:
       try:
-        subprocess.run(['./getdp', '-v', '0', 'levitation_melting_2d.pro', '-solve', 'Melting', '-pos', 'full', '-v2'], stdout = subprocess.PIPE, stderr = subprocess.PIPE, text = True, timeout = 30)
+        subprocess.run(['./gmsh', '-v', '0', '-3', 'levitation_melting_2d.geo'], stdout = subprocess.PIPE, stderr = subprocess.PIPE, text = True, timeout = 30)
 
       except subprocess.TimeoutExpired:
         ok = 0
 
       else:
-        if ok == 1:
-          break
+        try:
+          subprocess.run(['./getdp', '-v', '0', 'levitation_melting_2d.pro', '-solve', 'Melting', '-pos', 'full', '-v2'], stdout = subprocess.PIPE, stderr = subprocess.PIPE, text = True, timeout = 30)
 
-  totalForce = readTotalForce()
+        except subprocess.TimeoutExpired:
+          ok = 0
 
-  if optimalY_totalForce == None or optimalY_totalForce > totalForce:
-    optimalY_totalForce = totalForce
-    optimalArguments = argument
+        else:
+          if ok == 1:
+            break
 
-  print(f'Run runGMSHandGetDP() c1 = {current1}, c2 = {current2}, c3 = {current3}, c4 = {current4}, result = {totalForce}')
-  timeEnd = time.time()
-  outputCallback(result = totalForce, seconds = timeEnd - timeStart)
+    totalForce = readTotalForce()
 
-  if totalForce < requiredCriterionTolerance:
-    # with open('D:\\SGolak\\Lewitacja\\lewitacja\\lastOptimal.txt', 'w') as file:
-    #   file.write(' '.join(map(str, optimalArguments)))
+    if optimalY_totalForce == None or optimalY_totalForce > totalForce:
+      optimalY_totalForce = totalForce
+      optimalArguments = argument
 
-    raise StopOptimization()
+    timeEnd = time.time()
+    duration = timeEnd - timeStart
+    log(f'Run runGMSHandGetDP() c1 = {current1}, c2 = {current2}, c3 = {current3}, c4 = {current4}, result = {totalForce}, duration = {duration} [s]')
+    outputCallback(result = totalForce, seconds = duration)
 
-  return totalForce
+    if totalForce < requiredCriterionTolerance:
+      # with open('D:\\SGolak\\Lewitacja\\lewitacja\\lastOptimal.txt', 'w') as file:
+      #   file.write(' '.join(map(str, optimalArguments)))
 
-# Callback function for logging
+      raise StopOptimization()
+
+    return totalForce
 
 initialCurrent1 = 100
 initialCurrent2 = 100
@@ -345,6 +359,18 @@ def stop_optimization(xk, convergence = None):
 
 # Optimization
 
+if os.path.isfile(logPath) == True:
+  os.remove(logPath)
+
+def callback(result, seconds):
+  global X, Y
+  totalSeconds = seconds + X[-1] if X.size > 0 else seconds
+  X = numpy.append(X, totalSeconds)
+  Y = numpy.append(Y, result)
+
+# Callback function for logging
+outputCallback = callback
+
 for CHARGE_R, FORCE_SURFACE_TENSION in [
   [0.012, -0.5],
   [0.015, -1.45],
@@ -352,30 +378,41 @@ for CHARGE_R, FORCE_SURFACE_TENSION in [
 ]:
   charge_r = CHARGE_R
   forceSurfaceTension = FORCE_SURFACE_TENSION
-  print(f'*** Optymalizacja wariantu parametrów dla charge_r = {charge_r}, forceSurfaceTension = {forceSurfaceTension} ***')
+  log(f'*** Optymalizacja wariantu parametrów dla charge_r = {charge_r}, forceSurfaceTension = {forceSurfaceTension} ***')
 
   for ALGORITHM in ['Nelder-Mead', 'Powell', 'COBYLA']:
-    print(f'*** Optymalizacja wariantu dla algorytmu "{ALGORITHM}" ***')
+    log(f'*** Optymalizacja wariantu dla algorytmu "{ALGORITHM}" ***')
 
     try:
-      def callback(result, seconds):
-        global X, Y
-        totalSeconds = seconds + X[-1] if X.size > 0 else seconds
-        X = numpy.append(X, totalSeconds)
-        Y = numpy.append(Y, result)
-
       X = numpy.array([])
       Y = numpy.array([])
-      outputCallback = callback
       result = scipy.optimize.minimize(runGMSHandGetDP, initialArgument, bounds = argumentBounds, method = ALGORITHM)
 
     except StopOptimization:
-      print('*** Optymalizacja odnalazla zadawalajace minimum ***')
+      log('*** Optymalizacja odnalazla zadawalajace minimum ***')
       matplotlib.pyplot.plot(X, Y, label = ALGORITHM)
+
+  try:
+    log(f'*** Optymalizacja wariantu dla algorytmu "PSO" ***')
+    X = numpy.array([])
+    Y = numpy.array([])
+    PSO_bounds = ([100], [2000])
+    PSO_cognitiveParameter = 0.5
+    PSO_socialParameter = 0.3
+    PSO_inertia = 0.75
+    PSO_options = {'c1': PSO_cognitiveParameter, 'c2': PSO_socialParameter , 'w': PSO_inertia}
+    PSO_optimizer = pyswarms.single.GlobalBestPSO(n_particles = 10, dimensions = 1, options = PSO_options, bounds = PSO_bounds)
+    PSO_optimizer.optimize(runGMSHandGetDP, iters = 1_000_000, verbose = False)
+
+  except StopOptimization:
+    log('*** Optymalizacja odnalazla zadawalajace minimum ***')
+    matplotlib.pyplot.plot(X, Y, label = 'PSO')
 
   matplotlib.pyplot.grid()
   matplotlib.pyplot.legend()
   matplotlib.pyplot.title(f'{CHARGE_R * 1000} [mm]')
+  matplotlib.pyplot.xlabel('Execution time [s]')
+  matplotlib.pyplot.ylabel('Total criterion [?]')
   matplotlib.pyplot.savefig(f'{CHARGE_R * 1000}mm.png')
 
 # print(f'Optimal current1: {optimalArguments[0]}')
