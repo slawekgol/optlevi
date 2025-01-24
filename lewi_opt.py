@@ -3,9 +3,10 @@
 import datetime
 import math
 import matplotlib.pyplot
+import mealpy
 import numpy
 import os
-import pyswarms
+import random
 import scipy.optimize
 import subprocess
 import threading
@@ -60,8 +61,7 @@ optimalArguments = None
 #   return distance
 
 lastCriterionValue = 0
-requiredCriterionTolerance = 11
-# requiredCriterionTolerance = 0.001
+requiredCriterionTolerance = 0.001
 
 def log(message):
   with open(logPath, 'a') as logFile:
@@ -260,7 +260,6 @@ def runGMSHandGetDP(argument):
     # Optimized variables
     global optimalArguments, optimalY_totalForce
 
-    argument = numpy.array(argument).flatten()
     current1 = argument[0]
     current2 = argument[1]
     current3 = argument[2]
@@ -364,8 +363,8 @@ if os.path.isfile(logPath) == True:
 
 def callback(result, seconds):
   global X, Y
-  totalSeconds = seconds + X[-1] if X.size > 0 else seconds
-  X = numpy.append(X, totalSeconds)
+  duration = (seconds / 60) + X[-1] if X.size > 0 else (seconds / 60)
+  X = numpy.append(X, duration)
   Y = numpy.append(Y, result)
 
 # Callback function for logging
@@ -379,7 +378,9 @@ for CHARGE_R, FORCE_SURFACE_TENSION in [
   charge_r = CHARGE_R
   forceSurfaceTension = FORCE_SURFACE_TENSION
   log(f'*** Optymalizacja wariantu parametrów dla charge_r = {charge_r}, forceSurfaceTension = {forceSurfaceTension} ***')
+  matplotlib.pyplot.figure()
 
+  # Optymalizacja dla algorytmów NELDER-MEAD, POWELL, COBYLA
   for ALGORITHM in ['Nelder-Mead', 'Powell', 'COBYLA']:
     log(f'*** Optymalizacja wariantu dla algorytmu "{ALGORITHM}" ***')
 
@@ -392,26 +393,46 @@ for CHARGE_R, FORCE_SURFACE_TENSION in [
       log('*** Optymalizacja odnalazla zadawalajace minimum ***')
       matplotlib.pyplot.plot(X, Y, label = ALGORITHM)
 
+  # Optymalizacja dla algorytmu PSO
   try:
-    log(f'*** Optymalizacja wariantu dla algorytmu "PSO" ***')
+    log(f'*** Optymalizacja wariantu dla algorytmu "PSO (Particle Swarm Optimization)" ***')
     X = numpy.array([])
     Y = numpy.array([])
-    PSO_bounds = ([100], [2000])
-    PSO_cognitiveParameter = 0.5
-    PSO_socialParameter = 0.3
-    PSO_inertia = 0.75
-    PSO_options = {'c1': PSO_cognitiveParameter, 'c2': PSO_socialParameter , 'w': PSO_inertia}
-    PSO_optimizer = pyswarms.single.GlobalBestPSO(n_particles = 10, dimensions = 1, options = PSO_options, bounds = PSO_bounds)
-    PSO_optimizer.optimize(runGMSHandGetDP, iters = 1_000_000, verbose = False)
+    optimizer = mealpy.swarm_based.PSO.OriginalPSO()
+    optimizer.solve({'obj_func': runGMSHandGetDP, 'bounds': mealpy.FloatVar(lb = numpy.ones(4) * 100, ub = numpy.ones(4) * 2000), 'minmax': 'min'})
 
   except StopOptimization:
     log('*** Optymalizacja odnalazla zadawalajace minimum ***')
     matplotlib.pyplot.plot(X, Y, label = 'PSO')
 
+  # Optymalizacja dla algorytmu GWO
+  try:
+    log(f'*** Optymalizacja wariantu dla algorytmu "GWO (Grey Wolf Optimization)" ***')
+    X = numpy.array([])
+    Y = numpy.array([])
+    optimizer = mealpy.swarm_based.GWO.OriginalGWO()
+    optimizer.solve({'obj_func': runGMSHandGetDP, 'bounds': mealpy.FloatVar(lb = numpy.ones(4) * 100, ub = numpy.ones(4) * 2000), 'minmax': 'min'})
+
+  except StopOptimization:
+    log('*** Optymalizacja odnalazla zadawalajace minimum ***')
+    matplotlib.pyplot.plot(X, Y, label = 'GWO')
+
+  # Optymalizacja dla algorytmu GA
+  try:
+    log(f'*** Optymalizacja wariantu dla algorytmu "GA (Genetic Algorithm)" ***')
+    X = numpy.array([])
+    Y = numpy.array([])
+    optimizer = mealpy.evolutionary_based.GA.BaseGA()
+    optimizer.solve({'obj_func': runGMSHandGetDP, 'bounds': mealpy.FloatVar(lb = numpy.ones(4) * 100, ub = numpy.ones(4) * 2000), 'minmax': 'min'})
+
+  except StopOptimization:
+    log('*** Optymalizacja odnalazla zadawalajace minimum ***')
+    matplotlib.pyplot.plot(X, Y, label = 'GA')
+
   matplotlib.pyplot.grid()
-  matplotlib.pyplot.legend()
+  matplotlib.pyplot.legend(loc = 'upper right')
   matplotlib.pyplot.title(f'{CHARGE_R * 1000} [mm]')
-  matplotlib.pyplot.xlabel('Execution time [s]')
+  matplotlib.pyplot.xlabel('Execution time [min]')
   matplotlib.pyplot.ylabel('Total criterion [?]')
   matplotlib.pyplot.savefig(f'{CHARGE_R * 1000}mm.png')
 
