@@ -42,6 +42,7 @@ charge_r = 0.012 # ROZMIAR WSADU
 forceSurfaceTension = -1.45 # TU STOSOWAĆ Z POWYŻSZEJ TABELKI DLA POSZCZEGÓLNYCH ROZMIARÓW WSADU
 
 # other
+csvPath = 'opt.csv'
 logPath = 'opt.log'
 logColumnDelimiter = ', '
 logRowDelimiter = '\n'
@@ -62,6 +63,13 @@ optimalArguments = None
 
 lastCriterionValue = 0
 requiredCriterionTolerance = 0.001
+currentBestCriterion = None
+totalDuration = 0
+
+def reset():
+  global currentBestCriterion, totalDuration
+  currentBestCriterion = None
+  totalDuration = 0
 
 def log(message):
   with open(logPath, 'a') as logFile:
@@ -70,6 +78,12 @@ def log(message):
     logFile.write(logRowDelimiter)
     logFile.flush()
     print(message)
+
+def csv(*args):
+  with open(csvPath, 'a') as csvFile:
+    csvFile.write(logColumnDelimiter.join(str(value) for value in args))
+    csvFile.write(logRowDelimiter)
+    csvFile.flush()
 
 def readTotalForce():
   # Output (GlobalForce.txt)
@@ -249,8 +263,8 @@ argumentConstraints = [constraintC1]
 class StopOptimization(Exception):
   pass
 
-def outputCallback(result, seconds):
-  print(result, seconds)
+def outputCallback(result, duration):
+  print(result, duration)
 
 def runGMSHandGetDP(argument):
   with GLOBAL_LOCK:
@@ -258,7 +272,7 @@ def runGMSHandGetDP(argument):
     timeStart = time.time()
 
     # Optimized variables
-    global optimalArguments, optimalY_totalForce
+    global optimalArguments, optimalY_totalForce, currentBestCriterion, totalDuration
 
     current1 = argument[0]
     current2 = argument[1]
@@ -320,8 +334,15 @@ def runGMSHandGetDP(argument):
 
     timeEnd = time.time()
     duration = timeEnd - timeStart
-    log(f'Run runGMSHandGetDP() c1 = {current1}, c2 = {current2}, c3 = {current3}, c4 = {current4}, result = {totalForce}, duration = {duration} [s]')
-    outputCallback(result = totalForce, seconds = duration)
+    totalDuration = totalDuration + duration
+
+    if currentBestCriterion == None or totalForce < currentBestCriterion:
+      # Znaleziono najlepszą historycznie wartość
+      outputCallback(result = totalForce, duration = totalDuration)
+
+    currentBestCriterion = totalForce if currentBestCriterion == None or totalForce < currentBestCriterion else currentBestCriterion
+    log(f'Run runGMSHandGetDP() c1 = {current1}, c2 = {current2}, c3 = {current3}, c4 = {current4}, result = {totalForce}, currentBestCriterion = {currentBestCriterion}, duration = {duration} [s], totalDuration = {totalDuration} [s]')
+    csv(f'{datetime.datetime.now().isoformat()}Z', current1, current2, current3, current4, totalForce, currentBestCriterion, duration, totalDuration)
 
     if totalForce < requiredCriterionTolerance:
       # with open('D:\\SGolak\\Lewitacja\\lewitacja\\lastOptimal.txt', 'w') as file:
@@ -361,11 +382,14 @@ def stop_optimization(xk, convergence = None):
 if os.path.isfile(logPath) == True:
   os.remove(logPath)
 
-def callback(result, seconds):
+if os.path.isfile(csvPath) == True:
+  os.remove(csvPath)
+
+def callback(result, duration):
   global X, Y
-  duration = (seconds / 60) + X[-1] if X.size > 0 else (seconds / 60)
-  X = numpy.append(X, duration)
+  X = numpy.append(X, duration / 3600)
   Y = numpy.append(Y, result)
+  print(f'FOUND BEST ({result}) after {duration} [s]')
 
 # Callback function for logging
 outputCallback = callback
@@ -378,11 +402,14 @@ for CHARGE_R, FORCE_SURFACE_TENSION in [
   charge_r = CHARGE_R
   forceSurfaceTension = FORCE_SURFACE_TENSION
   log(f'*** Optymalizacja wariantu parametrów dla charge_r = {charge_r}, forceSurfaceTension = {forceSurfaceTension} ***')
+  csv(charge_r, forceSurfaceTension)
   matplotlib.pyplot.figure()
 
   # Optymalizacja dla algorytmów NELDER-MEAD, POWELL, COBYLA
   for ALGORITHM in ['Nelder-Mead', 'Powell', 'COBYLA']:
     log(f'*** Optymalizacja wariantu dla algorytmu "{ALGORITHM}" ***')
+    csv(ALGORITHM)
+    reset()
 
     try:
       X = numpy.array([])
@@ -396,6 +423,8 @@ for CHARGE_R, FORCE_SURFACE_TENSION in [
   # Optymalizacja dla algorytmu PSO
   try:
     log(f'*** Optymalizacja wariantu dla algorytmu "PSO (Particle Swarm Optimization)" ***')
+    csv('PSO')
+    reset()
     X = numpy.array([])
     Y = numpy.array([])
     optimizer = mealpy.swarm_based.PSO.OriginalPSO()
@@ -408,6 +437,8 @@ for CHARGE_R, FORCE_SURFACE_TENSION in [
   # Optymalizacja dla algorytmu GWO
   try:
     log(f'*** Optymalizacja wariantu dla algorytmu "GWO (Grey Wolf Optimization)" ***')
+    csv('GWO')
+    reset()
     X = numpy.array([])
     Y = numpy.array([])
     optimizer = mealpy.swarm_based.GWO.OriginalGWO()
@@ -420,6 +451,8 @@ for CHARGE_R, FORCE_SURFACE_TENSION in [
   # Optymalizacja dla algorytmu GA
   try:
     log(f'*** Optymalizacja wariantu dla algorytmu "GA (Genetic Algorithm)" ***')
+    csv('GA')
+    reset()
     X = numpy.array([])
     Y = numpy.array([])
     optimizer = mealpy.evolutionary_based.GA.BaseGA()
@@ -432,7 +465,8 @@ for CHARGE_R, FORCE_SURFACE_TENSION in [
   matplotlib.pyplot.grid()
   matplotlib.pyplot.legend(loc = 'upper right')
   matplotlib.pyplot.title(f'{CHARGE_R * 1000} [mm]')
-  matplotlib.pyplot.xlabel('Execution time [min]')
+  matplotlib.pyplot.xlabel('Execution time [h]')
+  matplotlib.pyplot.xscale('log')
   matplotlib.pyplot.ylabel('Total criterion [?]')
   matplotlib.pyplot.savefig(f'{CHARGE_R * 1000}mm.png')
 
